@@ -466,10 +466,12 @@ class ReversedPackageDAG(PackageDAG):
         return PackageDAG(dict(m))
 
 
-def render_text(tree, list_all=True, frozen=False):
+def render_text(tree, depth, list_all=True, frozen=False):
     """Print tree as text on console
 
     :param dict tree: the package tree
+    :param int depth: maximum depth to descend in to tree
+                      0 descends to the full depth
     :param bool list_all: whether to list all the pgks at the root
                           level or only those that are the
                           sub-dependencies
@@ -486,21 +488,23 @@ def render_text(tree, list_all=True, frozen=False):
     if not list_all:
         nodes = [p for p in nodes if p.key not in branch_keys]
 
-    def aux(node, parent=None, indent=0, chain=None):
+    def aux(node, depth, parent=None, indent=0, chain=None, deep=1):
         chain = chain or []
         node_str = node.render(parent, frozen)
         if parent:
             prefix = ' '*indent + ('- ' if use_bullets else '')
             node_str = prefix + node_str
         result = [node_str]
-        children = [aux(c, node, indent=indent+2,
-                        chain=chain+[c.project_name])
+        children = [aux(c, depth, node, indent=indent+2,
+                        chain=chain+[c.project_name],
+                        deep=deep+1)
                     for c in tree.get_children(node.key)
-                    if c.project_name not in chain]
+                    if c.project_name not in chain and
+                        (not depth or depth > deep)]
         result += list(flatten(children))
         return result
 
-    lines = flatten([aux(p) for p in nodes])
+    lines = flatten([aux(p, depth) for p in nodes])
     print('\n'.join(lines))
 
 
@@ -523,7 +527,7 @@ def render_json(tree, indent):
                       indent=indent)
 
 
-def render_json_tree(tree, indent):
+def render_json_tree(tree, depth, indent):
     """Converts the tree into a nested json representation.
 
     The json repr will be a list of hashes, each hash having the following fields:
@@ -534,6 +538,8 @@ def render_json_tree(tree, indent):
       - dependencies: list of dependencies
 
     :param dict tree: dependency tree
+    :param int depth: maximum depth to descend in to tree
+                      0 descends to the full depth
     :param int indent: no. of spaces to indent json
     :returns: json representation of the tree
     :rtype: str
@@ -543,7 +549,7 @@ def render_json_tree(tree, indent):
     branch_keys = set(r.key for r in flatten(tree.values()))
     nodes = [p for p in tree.keys() if p.key not in branch_keys]
 
-    def aux(node, parent=None, chain=None):
+    def aux(node, depth, parent=None, chain=None, deep=1):
         if chain is None:
             chain = [node.project_name]
 
@@ -554,14 +560,14 @@ def render_json_tree(tree, indent):
             d['required_version'] = d['installed_version']
 
         d['dependencies'] = [
-            aux(c, parent=node, chain=chain+[c.project_name])
+            aux(c, depth, parent=node, chain=chain+[c.project_name], deep=deep+1)
             for c in tree.get_children(node.key)
-            if c.project_name not in chain
+            if c.project_name not in chain and (not depth or depth > deep)
         ]
 
         return d
 
-    return json.dumps([aux(p) for p in nodes], indent=indent)
+    return json.dumps([aux(p, depth) for p in nodes], indent=indent)
 
 
 def dump_graphviz(tree, output_format='dot', is_reverse=False):
@@ -749,6 +755,12 @@ def get_parser():
                             'Comma separated list of select packages to exclude '
                             'from the output. If set, --all will be ignored.'
                         ), metavar='PACKAGES')
+    parser.add_argument('-d', '--depth', default=0, type=int,
+                        help=(
+                            'Starting at 1, display max. depth of the dependency '
+                            'tree. Use 0 (default) to show the whole tree. '
+                            'This does not operate on json output.'
+                        ))
     parser.add_argument('-j', '--json', action='store_true', default=False,
                         help=(
                             'Display dependency tree as json. This will yield '
@@ -780,6 +792,8 @@ def main():
 
     pkgs = get_installed_distributions(local_only=args.local_only,
                                        user_only=args.user_only)
+
+    depth = args.depth if int(args.depth) > 0 else False
 
     tree = PackageDAG.from_pkgs(pkgs)
 
@@ -818,14 +832,14 @@ def main():
     if args.json:
         print(render_json(tree, indent=4))
     elif args.json_tree:
-        print(render_json_tree(tree, indent=4))
+        print(render_json_tree(tree, depth, indent=4))
     elif args.output_format:
         output = dump_graphviz(tree,
                                output_format=args.output_format,
                                is_reverse=args.reverse)
         print_graphviz(output)
     else:
-        render_text(tree, args.all, args.freeze)
+        render_text(tree, depth, args.all, args.freeze)
 
     return return_code
 
